@@ -228,7 +228,7 @@ def build_fire_map(
     overlays: Sequence[object] | None = None,
     cluster: bool = True,
     max_points: int = 1500,
-    highlight_zones: bool = True,
+    highlight_zones: bool = False,
 ) -> folium.Map:
     """
     Build an interactive Folium map of WA wildfires.
