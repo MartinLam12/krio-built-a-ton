@@ -137,12 +137,86 @@ def make_weather_layer(
     return group
 
 
+def _zone_fill_color(share: float) -> str:
+    """Red-scale fill for a zone based on its share of total fire activity."""
+    if share >= 0.40:
+        return "#7f0000"
+    if share >= 0.20:
+        return "#b91c1c"
+    if share >= 0.10:
+        return "#ef4444"
+    if share >= 0.05:
+        return "#f59e0b"
+    return "#fcd34d"
+
+
+def build_zone_layer(df, *, name: str = "Fire zones (DNR regions)") -> object | None:
+    """
+    Build a Folium layer that highlights each DNR region (zone) as a shaded
+    area, with fill intensity scaled by that zone's share of fire activity.
+
+    Zone shapes are derived from the fire points themselves (a convex hull per
+    region), so the highlight reflects exactly the data currently shown and
+    reacts to the active filters -- no external boundary file needed.
+
+    Returns None if folium/shapely aren't available or there's nothing to draw.
+    """
+    if not FOLIUM_AVAILABLE:
+        return None
+    try:
+        from shapely.geometry import MultiPoint
+    except ImportError:
+        return None
+
+    data = to_wa_bounds(df)
+    if data.empty or "REGION_NAME" not in data.columns:
+        return None
+
+    total_fires = len(data)
+    group = folium.FeatureGroup(name=name, show=True)
+    drew_any = False
+
+    for region, grp in data.groupby("REGION_NAME"):
+        if region is None or len(grp) < 3:
+            continue  # need at least 3 points to form an area
+        pts = list(zip(grp["LON_COORD"], grp["LAT_COORD"]))
+        hull = MultiPoint(pts).convex_hull
+        if hull.geom_type != "Polygon":
+            continue  # collinear points -> no area
+
+        # Folium wants (lat, lon) pairs.
+        ring = [(y, x) for x, y in hull.exterior.coords]
+        fires = len(grp)
+        acres = float(grp["ACRES_BURNED"].sum()) if "ACRES_BURNED" in grp else 0.0
+        share = fires / total_fires if total_fires else 0.0
+        color = _zone_fill_color(share)
+
+        tooltip = (
+            f"<b>{region}</b><br>"
+            f"{fires:,} fires ({share*100:.0f}% of shown)<br>"
+            f"{acres:,.0f} acres burned"
+        )
+        folium.Polygon(
+            locations=ring,
+            color=color,
+            weight=2,
+            fill=True,
+            fill_color=color,
+            fill_opacity=0.18,
+            tooltip=folium.Tooltip(tooltip),
+        ).add_to(group)
+        drew_any = True
+
+    return group if drew_any else None
+
+
 def build_fire_map(
     df,
     *,
     overlays: Sequence[object] | None = None,
     cluster: bool = True,
     max_points: int = 1500,
+    highlight_zones: bool = True,
 ) -> folium.Map:
     """
     Build an interactive Folium map of WA wildfires.
@@ -160,26 +234,37 @@ def build_fire_map(
         Cluster dense fire markers for performance/readability.
     max_points : int
         Cap the number of fire markers rendered (largest fires first).
+    highlight_zones : bool
+        Shade each DNR region (zone) with intensity scaled by fire activity.
 
     Returns
     -------
     folium.Map
     """
     data = to_wa_bounds(df)
-    if "ACRES_BURNED" in data.columns:
-        data = data.nlargest(min(max_points, len(data)), "ACRES_BURNED")
-    else:
-        data = data.head(max_points)
 
     m = folium.Map(location=WA_CENTER, zoom_start=7, tiles="OpenStreetMap")
     # Alternate key-free basemaps for a Google-Maps-style satellite/terrain toggle.
     folium.TileLayer(tiles=ESRI_SATELLITE, attr="Esri", name="Satellite").add_to(m)
     folium.TileLayer(tiles=ESRI_TERRAIN, attr="Esri", name="Terrain").add_to(m)
 
+    # Highlighted fire zones go under the markers. Built from the full filtered
+    # set (not the marker-capped subset) so the shaded areas stay accurate.
+    if highlight_zones:
+        zone_layer = build_zone_layer(data)
+        if zone_layer is not None:
+            zone_layer.add_to(m)
+
+    # Cap markers for performance, largest fires first.
+    if "ACRES_BURNED" in data.columns:
+        marker_data = data.nlargest(min(max_points, len(data)), "ACRES_BURNED")
+    else:
+        marker_data = data.head(max_points)
+
     fire_group = folium.FeatureGroup(name="Wildfires", show=True)
     target = MarkerCluster().add_to(fire_group) if cluster else fire_group
 
-    for _, r in data.iterrows():
+    for _, r in marker_data.iterrows():
         acres = float(r.get("ACRES_BURNED", 0) or 0)
         name = r.get("INCIDENT_NM", "Unnamed")
         county = r.get("COUNTY_LABEL_NM", "Unknown")
