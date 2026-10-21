@@ -139,27 +139,85 @@ def fires_per_year(region, cause, yr_range):
     )
 
 
+# Washington state geographic bounds (lon/lat) used to clean coordinates and
+# frame the map on WA.
+WA_LON_MIN, WA_LON_MAX = -124.85, -116.90
+WA_LAT_MIN, WA_LAT_MAX = 45.50, 49.05
+
+# Local cached Washington state boundary (GeoJSON). This lets us draw the
+# actual WA shape under the fire points using plain lon/lat coordinates, with
+# no dependency on geoviews/cartopy reprojection (which is broken in the
+# installed geoviews version).
+WA_BOUNDARY_FILE = Path(__file__).parent / "assets" / "wa_boundary.geojson"
+
+
+def _load_wa_rings():
+    """Return WA boundary as a list of [(lon, lat), ...] rings, or [] if missing."""
+    if not WA_BOUNDARY_FILE.exists():
+        return []
+    import json
+
+    gj = json.loads(WA_BOUNDARY_FILE.read_text())
+    geom = gj["features"][0]["geometry"]
+    rings = []
+    if geom["type"] == "Polygon":
+        rings = geom["coordinates"]
+    elif geom["type"] == "MultiPolygon":
+        for poly in geom["coordinates"]:
+            rings.extend(poly)
+    return [[(x, y) for x, y in ring] for ring in rings]
+
+
+# Load the WA outline once at import time.
+WA_RINGS = _load_wa_rings()
+
+
 @pn.depends(region_select, cause_select, year_range)
 def fire_map(region, cause, yr_range):
+    import holoviews as hv
+
     data = filter_data(region, cause, yr_range)
     data = data.dropna(subset=["LAT_COORD", "LON_COORD"])
-    # Drop obviously bad coordinates (0,0 etc.) and clip to WA-ish bounds.
+    # Drop obviously bad coordinates (0,0 etc.) and clip to WA bounds.
     data = data[
-        data["LAT_COORD"].between(45, 49.5) & data["LON_COORD"].between(-125, -116)
+        data["LAT_COORD"].between(WA_LAT_MIN, WA_LAT_MAX)
+        & data["LON_COORD"].between(WA_LON_MIN, WA_LON_MAX)
     ]
     if data.empty:
         return pn.pane.Markdown("### No mappable points for the current filters.")
-    return data.hvplot.points(
+
+    points = data.hvplot.points(
         x="LON_COORD",
         y="LAT_COORD",
         c="ACRES_BURNED",
         cmap="YlOrRd",
         clim=(0, 500),
         size=20,
-        title="Fire locations (color = acres burned)",
-        height=420,
+        title="Fire locations over Washington (color = acres burned)",
+        height=460,
         hover_cols=["INCIDENT_NM", "COUNTY_LABEL_NM", "ACRES_BURNED"],
         geo=False,
+        xlabel="Longitude",
+        ylabel="Latitude",
+        colorbar=True,
+    )
+
+    # Overlay the real Washington state outline so the points are framed by the
+    # actual shape of the state. Drawn in plain lon/lat, so no reprojection.
+    if WA_RINGS:
+        wa_outline = hv.Path(WA_RINGS).opts(
+            color="#374151", line_width=1.5
+        )
+        plot = wa_outline * points
+    else:
+        plot = points
+
+    # Frame the view on Washington.
+    return plot.opts(
+        hv.opts.Overlay(width=720, height=460)
+    ).redim.range(
+        LON_COORD=(WA_LON_MIN, WA_LON_MAX),
+        LAT_COORD=(WA_LAT_MIN, WA_LAT_MAX),
     )
 
 
