@@ -33,7 +33,12 @@ from typing import Iterable, Sequence
 
 import panel as pn
 
-from data_access import data_available, load_fire_data
+from data_access import (
+    data_available,
+    drought_available,
+    load_drought_data,
+    load_fire_data,
+)
 
 # Folium (Leaflet) is optional at app-import time so one missing dependency
 # cannot take down the other teammates' widgets.
@@ -144,6 +149,40 @@ def _frequency_label(rate: float) -> str:
         interval = 1 / rate
         return f"about 1 recorded incident / {interval:,.1f} years"
     return "No recurrence estimate"
+
+
+def _drought_band(dsci: float) -> str:
+    """Present Logan's statewide DSCI using the same broad severity bands."""
+    if dsci < 50:
+        return "None / abnormally dry"
+    if dsci < 150:
+        return "Moderate drought"
+    if dsci < 300:
+        return "Severe drought"
+    return "Extreme drought"
+
+
+def _latest_drought_context() -> dict | None:
+    """Read the latest statewide DSCI from Logan's shared data source."""
+    if not drought_available():
+        return None
+    try:
+        drought = load_drought_data().dropna(subset=["DATE", "DSCI"])
+        if drought.empty:
+            return None
+        latest = drought.sort_values("DATE").iloc[-1]
+        dsci = float(latest["DSCI"])
+        date = latest["DATE"]
+        return {
+            "dsci": dsci,
+            "band": _drought_band(dsci),
+            "date": date,
+            "date_label": date.strftime("%b %d, %Y"),
+        }
+    except Exception:  # optional teammate data must never block the map
+        # Logan's card remains the source of truth; malformed or unreadable
+        # drought context must never prevent Paul's map from rendering.
+        return None
 
 
 def to_wa_bounds(df):
@@ -482,8 +521,13 @@ def build_fire_map(
     return map_
 
 
-def _summary_html(data, hotspots: Sequence[dict], cell_km: int) -> str:
-    """Return a compact, government-style analytical summary."""
+def _summary_html(
+    data,
+    hotspots: Sequence[dict],
+    cell_km: int,
+    drought_context: dict | None,
+) -> str:
+    """Return a compact analytical summary with Logan's drought context."""
     top = hotspots[0] if hotspots else None
     top_area = (
         f"{_clean_text(top['county'])} County" if top else "No repeated cluster"
@@ -493,22 +537,36 @@ def _summary_html(data, hotspots: Sequence[dict], cell_km: int) -> str:
     )
     active_cells = len(hotspots)
     mapped = len(data)
-    total_acres = float(data["ACRES_BURNED"].sum()) if "ACRES_BURNED" in data else 0
+
+    if drought_context:
+        drought_value = f"DSCI {drought_context['dsci']:,.0f}"
+        drought_detail = (
+            f"{_clean_text(drought_context['band'])} · "
+            f"{_clean_text(drought_context['date_label'])}"
+        )
+    else:
+        drought_value = "Not loaded"
+        drought_detail = "Run drought_data_pull.py"
 
     cards = (
-        ("MAPPED INCIDENTS", f"{mapped:,}", "Current filter window"),
-        ("RECURRING CELLS", f"{active_cells:,}", f"Top ~{cell_km} km analysis areas"),
-        ("PEAK RECURRENCE AREA", top_area, top_detail),
-        ("CUMULATIVE ACRES", f"{total_acres:,.0f}", "Historical records shown"),
+        ("MAPPED INCIDENTS", f"{mapped:,}", "Current filter window", "#31566D"),
+        (
+            "RECURRING CELLS",
+            f"{active_cells:,}",
+            f"Top ~{cell_km} km analysis areas",
+            "#31566D",
+        ),
+        ("PEAK RECURRENCE AREA", top_area, top_detail, "#8F2430"),
+        ("STATEWIDE DROUGHT · LOGAN", drought_value, drought_detail, "#C75B35"),
     )
     card_html = "".join(
-        f"<div style='background:#FFFFFF;border:1px solid #D6E0E6;border-top:3px solid #31566D;"
+        f"<div style='background:#FFFFFF;border:1px solid #D6E0E6;border-top:3px solid {accent};"
         f"border-radius:3px;padding:10px 12px;min-height:70px'>"
         f"<div style='font-size:9px;font-weight:700;letter-spacing:.11em;color:#607584'>{label}</div>"
         f"<div style='font-size:17px;font-weight:700;color:#172B3A;margin-top:4px;"
         f"white-space:nowrap;overflow:hidden;text-overflow:ellipsis'>{value}</div>"
         f"<div style='font-size:10px;color:#71818D;margin-top:2px'>{detail}</div></div>"
-        for label, value, detail in cards
+        for label, value, detail, accent in cards
     )
     return (
         "<div style='display:grid;grid-template-columns:repeat(2,minmax(0,1fr));"
@@ -539,6 +597,7 @@ def create_panel() -> pn.viewable.Viewable:
         )
 
     data = to_wa_bounds(load_fire_data())
+    drought_context = _latest_drought_context()
     years = sorted(int(year) for year in data["DSCVR_YEAR"].dropna().unique())
     if not years:
         return pn.Column(
@@ -559,7 +618,7 @@ def create_panel() -> pn.viewable.Viewable:
                 Historical Recurrence Monitor
               </div>
               <div style="font-size:11px;color:#D2DDE3;margin-top:4px">
-                Recorded incident concentration and recurrence by approximate local area
+                Historical fire recurrence with Logan's statewide drought context
               </div>
             </div>
             <div style="border:1px solid #6E8796;border-radius:3px;padding:5px 7px;
@@ -657,7 +716,7 @@ def create_panel() -> pn.viewable.Viewable:
             recurrence_hotspots=hotspots,
         )
         summary = pn.pane.HTML(
-            _summary_html(filtered, hotspots, cell_km),
+            _summary_html(filtered, hotspots, cell_km, drought_context),
             sizing_mode="stretch_width",
         )
         map_pane = pn.pane.plot.Folium(
@@ -675,8 +734,10 @@ def create_panel() -> pn.viewable.Viewable:
           The relative recurrence index is a log-scaled measure of incident concentration, so denser
           clusters are always larger and receive an equal-or-higher index. Hover a bubble for local
           frequency, active years, and latest recorded incident; hover or click an incident dot
-          for fire details. This historical indicator does not predict active ignition or re-ignition risk.
-          Operational risk also requires current weather, fuels, wind, and incident-status data.
+          for fire details. Logan's DSCI card supplies current statewide drought context only and does
+          not spatially modify the local recurrence index. This historical indicator does not predict
+          active ignition or re-ignition risk; operational risk also requires local weather, fuels,
+          wind, and incident-status data.
         </div>
         """,
         sizing_mode="stretch_width",
