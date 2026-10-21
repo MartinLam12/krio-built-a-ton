@@ -153,17 +153,6 @@ html, body {{
   color: {WHITE}; font-size: 12px; letter-spacing: 1.6px;
   text-transform: uppercase; margin-top: 2px;
 }}
-.section-tabs {{
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  background: #2a3b41;
-  border-bottom: 2px solid {RED};
-}}
-.section-tab {{
-  color: {TEAL}; text-align: center; padding: 12px 4px 10px;
-  font-size: 10px; letter-spacing: .4px; text-transform: uppercase;
-}}
-.section-tab.active {{ color: {WHITE}; background: rgba(255,255,255,.055); font-weight: 700; }}
 .section-label {{
   color: {TEAL}; font-size: 11px; letter-spacing: 1px;
   text-transform: uppercase; margin: 18px 0 9px;
@@ -546,11 +535,6 @@ brand = pn.pane.HTML(
       <div class="location-kicker">◉&nbsp; CURRENT COVERAGE</div>
       <div class="location-name">Washington</div>
       <div class="location-subtitle">United States</div>
-    </div>
-    <div class="section-tabs">
-      <div class="section-tab">Context</div>
-      <div class="section-tab">Filters</div>
-      <div class="section-tab active">Priorities</div>
     </div>
     """,
     sizing_mode="stretch_width",
