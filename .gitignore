@@ -1,5 +1,23 @@
+# --- Node / Vite (React app) ---
 node_modules
 dist
-.DS_Store
-*.local
 .vite
+*.local
+
+# --- Python (Panel dashboard) ---
+# Generated data (pulled via fire_data_pull.py)
+data/
+
+# Python caches
+__pycache__/
+*.pyc
+
+# Virtual environments
+buildathon/
+.venv/
+venv/
+
+# --- Misc ---
+.DS_Store
+# Notes / scratch
+brainstorm.txt
