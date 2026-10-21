@@ -1,6 +1,7 @@
 """
 Pull DNR Fire Statistics (2008-Present) from the Washington DNR ArcGIS REST service,
-parse into a pandas DataFrame, and save to data/dnr_fire_statistics.parquet.
+parse into a pandas DataFrame, and save to data/ (parquet if an engine is
+available, otherwise CSV as a fallback for platforms without a parquet wheel).
 
 Source layer:
 https://gis.dnr.wa.gov/site3/rest/services/Public_Wildfire/WADNR_PUBLIC_WD_WildFire_Data/MapServer/2
@@ -22,7 +23,8 @@ BASE_URL = (
 PAGE_SIZE = 2000
 
 OUTPUT_DIR = Path(__file__).parent / "data"
-OUTPUT_FILE = OUTPUT_DIR / "dnr_fire_statistics.parquet"
+PARQUET_FILE = OUTPUT_DIR / "dnr_fire_statistics.parquet"
+CSV_FILE = OUTPUT_DIR / "dnr_fire_statistics.csv"
 
 
 def get_total_count(session: requests.Session) -> int:
@@ -84,8 +86,19 @@ def main() -> None:
     print("\nPreview:")
     print(df.head())
 
-    df.to_parquet(OUTPUT_FILE, index=False)
-    print(f"\nSaved {len(df)} rows to {OUTPUT_FILE}")
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    # Prefer parquet (smaller, typed), but fall back to CSV when no parquet
+    # engine is available -- e.g. on Windows-on-ARM, where neither pyarrow nor
+    # a working fastparquet has a wheel. data_access.load_fire_data() reads
+    # whichever file exists, so the dashboard works either way.
+    try:
+        df.to_parquet(PARQUET_FILE, index=False)
+        print(f"\nSaved {len(df)} rows to {PARQUET_FILE}")
+    except Exception as exc:  # noqa: BLE001 - any missing-engine error -> CSV
+        print(f"\nParquet engine unavailable ({exc.__class__.__name__}); "
+              f"writing CSV instead.")
+        df.to_csv(CSV_FILE, index=False)
+        print(f"Saved {len(df)} rows to {CSV_FILE}")
 
 
 if __name__ == "__main__":
