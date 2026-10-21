@@ -137,27 +137,15 @@ def make_weather_layer(
     return group
 
 
-def _zone_fill_color(share: float) -> str:
-    """Red-scale fill for a zone based on its share of total fire activity."""
-    if share >= 0.40:
-        return "#7f0000"
-    if share >= 0.20:
-        return "#b91c1c"
-    if share >= 0.10:
-        return "#ef4444"
-    if share >= 0.05:
-        return "#f59e0b"
-    return "#fcd34d"
-
-
-def build_zone_layer(df, *, name: str = "Fire zones (DNR regions)") -> object | None:
+def build_zone_layer(df, *, name: str = "Fire zones (hover)") -> object | None:
     """
-    Build a Folium layer that highlights each DNR region (zone) as a shaded
-    area, with fill intensity scaled by that zone's share of fire activity.
+    Build a Folium layer that outlines each DNR region (zone) very faintly, so
+    the map stays clean -- the zone only "lights up" (fills in) when you hover
+    over it, showing the region name and its fire stats in a tooltip.
 
     Zone shapes are derived from the fire points themselves (a convex hull per
-    region), so the highlight reflects exactly the data currently shown and
-    reacts to the active filters -- no external boundary file needed.
+    region), so they reflect exactly the data currently shown and react to the
+    active filters -- no external boundary file needed.
 
     Returns None if folium/shapely aren't available or there's nothing to draw.
     """
@@ -173,9 +161,9 @@ def build_zone_layer(df, *, name: str = "Fire zones (DNR regions)") -> object | 
         return None
 
     total_fires = len(data)
-    group = folium.FeatureGroup(name=name, show=True)
-    drew_any = False
 
+    # Collect each zone as a GeoJSON feature so we can attach hover behavior.
+    features = []
     for region, grp in data.groupby("REGION_NAME"):
         if region is None or len(grp) < 3:
             continue  # need at least 3 points to form an area
@@ -184,30 +172,54 @@ def build_zone_layer(df, *, name: str = "Fire zones (DNR regions)") -> object | 
         if hull.geom_type != "Polygon":
             continue  # collinear points -> no area
 
-        # Folium wants (lat, lon) pairs.
-        ring = [(y, x) for x, y in hull.exterior.coords]
         fires = len(grp)
         acres = float(grp["ACRES_BURNED"].sum()) if "ACRES_BURNED" in grp else 0.0
         share = fires / total_fires if total_fires else 0.0
-        color = _zone_fill_color(share)
-
-        tooltip = (
-            f"<b>{region}</b><br>"
-            f"{fires:,} fires ({share*100:.0f}% of shown)<br>"
-            f"{acres:,.0f} acres burned"
+        features.append(
+            {
+                "type": "Feature",
+                "geometry": {
+                    "type": "Polygon",
+                    # GeoJSON uses [lon, lat] order.
+                    "coordinates": [[list(c) for c in hull.exterior.coords]],
+                },
+                "properties": {
+                    "Zone": region,
+                    "Fires": f"{fires:,} ({share*100:.0f}% of shown)",
+                    "Acres burned": f"{acres:,.0f}",
+                },
+            }
         )
-        folium.Polygon(
-            locations=ring,
-            color=color,
-            weight=2,
-            fill=True,
-            fill_color=color,
-            fill_opacity=0.18,
-            tooltip=folium.Tooltip(tooltip),
-        ).add_to(group)
-        drew_any = True
 
-    return group if drew_any else None
+    if not features:
+        return None
+
+    group = folium.FeatureGroup(name=name, show=True)
+    folium.GeoJson(
+        {"type": "FeatureCollection", "features": features},
+        # Default: barely-there outline, no fill -> keeps the map uncluttered.
+        style_function=lambda _f: {
+            "color": "#9ca3af",
+            "weight": 1,
+            "opacity": 0.35,
+            "fillOpacity": 0.0,
+        },
+        # On hover: the zone fills in softly and its border strengthens.
+        highlight_function=lambda _f: {
+            "color": "#b91c1c",
+            "weight": 2,
+            "opacity": 0.9,
+            "fillColor": "#ef4444",
+            "fillOpacity": 0.25,
+        },
+        tooltip=folium.GeoJsonTooltip(
+            fields=["Zone", "Fires", "Acres burned"],
+            aliases=["Zone", "Fires", "Acres burned"],
+            sticky=True,
+        ),
+    ).add_to(group)
+
+    return group
 
 
 def build_fire_map(
