@@ -1,0 +1,14 @@
+# Generated data (pulled via fire_data_pull.py)
+data/
+
+# Python caches
+__pycache__/
+*.pyc
+
+# Virtual environments
+buildathon/
+.venv/
+venv/
+
+# Notes / scratch
+brainstorm.txt
